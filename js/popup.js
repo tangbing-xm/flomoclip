@@ -20,6 +20,11 @@ const elements = {
   btnSave: document.getElementById('btn-save'),
   btnClear: document.getElementById('btn-clear'),
   
+  // 图片相关元素
+  imagesPreview: document.getElementById('images-preview'),
+  btnAddImage: document.getElementById('btn-add-image'),
+  imageUpload: document.getElementById('image-upload'),
+  
   // 历史记录元素
   historyList: document.getElementById('history-list'),
   
@@ -36,11 +41,17 @@ const elements = {
   btnTestWebhook: document.getElementById('btn-test-webhook'),
   
   // 状态提示
-  statusToast: document.getElementById('status-toast')
+  statusToast: document.getElementById('status-toast'),
+  
+  // 图片预览遮罩层
+  imageViewerOverlay: null
 };
 
 // 当前活动标签页信息
 let currentTab = null;
+
+// 全局图片数组，用于存储图片数据
+let uploadedImages = [];
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
@@ -61,18 +72,47 @@ document.addEventListener('DOMContentLoaded', () => {
   // 加载离线内容数量
   updateOfflineCount();
   
-  // 检查是否有来自背景脚本的编辑内容
-  chrome.storage.local.get('editContent', (data) => {
+  // 检查是否有来自背景脚本的编辑内容和图片
+  chrome.storage.local.get(['editContent', 'editImageUrl'], (data) => {
     if (data.editContent) {
       elements.editor.value = data.editContent;
       // 清除存储的编辑内容
       chrome.storage.local.remove('editContent');
     }
+    
+    // 加载图片（如果有）
+    if (data.editImageUrl) {
+      // 添加图片到预览
+      const imageName = data.editImageUrl.split('/').pop().split('?')[0]; // 提取文件名
+      addImageToPreview(data.editImageUrl, imageName);
+      chrome.storage.local.remove('editImageUrl');
+    }
   });
   
   // 初始化导航事件监听器
   setupEventListeners();
+  
+  // 尝试获取选中的图片（如果有）
+  fetchSelectedImages();
 });
+
+// 获取选中的图片
+function fetchSelectedImages() {
+  chrome.runtime.sendMessage({action: 'getSelectedImage'}, (response) => {
+    if (chrome.runtime.lastError) {
+      console.error('获取选中图片时出错:', chrome.runtime.lastError.message);
+      return;
+    }
+    
+    if (response && response.imageUrls && response.imageUrls.length > 0) {
+      // 处理每个图片URL
+      response.imageUrls.forEach(imageUrl => {
+        const imageName = imageUrl.split('/').pop().split('?')[0]; // 提取文件名
+        addImageToPreview(imageUrl, imageName);
+      });
+    }
+  });
+}
 
 // 设置事件监听器
 function setupEventListeners() {
@@ -87,6 +127,17 @@ function setupEventListeners() {
   
   // 标签输入
   elements.tagInput.addEventListener('keydown', handleTagInput);
+  
+  // 图片相关事件
+  if (elements.btnAddImage) {
+    elements.btnAddImage.addEventListener('click', () => {
+      elements.imageUpload.click();
+    });
+  }
+  
+  if (elements.imageUpload) {
+    elements.imageUpload.addEventListener('change', handleImageUpload);
+  }
   
   // 设置保存
   elements.btnSaveSettings.addEventListener('click', saveSettings);
@@ -117,6 +168,54 @@ function setupEventListeners() {
       }
     });
   }
+  
+  // 创建图片预览遮罩层
+  createImageViewerOverlay();
+}
+
+// 创建图片预览遮罩层
+function createImageViewerOverlay() {
+  // 创建遮罩层
+  const overlay = document.createElement('div');
+  overlay.className = 'image-viewer-overlay';
+  overlay.style.display = 'none';
+  
+  // 创建图片容器
+  const imgContainer = document.createElement('div');
+  imgContainer.className = 'image-viewer-container';
+  
+  // 创建图片元素
+  const img = document.createElement('img');
+  img.className = 'image-viewer-img';
+  
+  // 创建关闭按钮
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'image-viewer-close';
+  closeBtn.innerHTML = '×';
+  closeBtn.title = '关闭预览';
+  
+  // 添加关闭事件
+  closeBtn.addEventListener('click', () => {
+    overlay.style.display = 'none';
+    document.body.style.overflow = 'auto'; // 恢复滚动
+  });
+  
+  // 点击遮罩层也可以关闭
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) {
+      overlay.style.display = 'none';
+      document.body.style.overflow = 'auto'; // 恢复滚动
+    }
+  });
+  
+  // 组装
+  imgContainer.appendChild(img);
+  overlay.appendChild(imgContainer);
+  overlay.appendChild(closeBtn);
+  document.body.appendChild(overlay);
+  
+  // 保存到elements
+  elements.imageViewerOverlay = overlay;
 }
 
 // 切换页面
@@ -355,6 +454,32 @@ function saveContent() {
   // 获取编辑器内容
   let content = elements.editor.value.trim();
   
+  // 检查是否有内容
+  if (!content && uploadedImages.length === 0) {
+    showToast('内容不能为空', 'error');
+    return;
+  }
+  
+  // 如果没有文本内容但有图片，添加一个默认文本
+  if (!content && uploadedImages.length > 0) {
+    content = `分享 ${uploadedImages.length} 张图片`;
+  }
+  
+  // 在内容末尾添加图片的完整Markdown链接
+  if (uploadedImages.length > 0) {
+    // 在内容和图片之间添加空行
+    if (content) {
+      content += '\n\n';
+    }
+    
+    // 添加所有图片
+    uploadedImages.forEach((image, index) => {
+      const displayName = image.name || `图片_${index + 1}`;
+      const fullMarkdown = `![${displayName}](${image.data})`;
+      content += fullMarkdown + '\n';
+    });
+  }
+  
   // 获取来源信息，确保将source-info中的链接添加到内容中
   const sourceInfoElement = elements.sourceInfo;
   if (sourceInfoElement && sourceInfoElement.textContent.trim() && !content.includes('来源：')) {
@@ -365,106 +490,80 @@ function saveContent() {
     }
   }
   
-  if (!content) {
-    showToast('内容不能为空', 'error');
-    return;
+  // 获取标签输入的值
+  const tagsInput = elements.tagInput.value.trim();
+  if (tagsInput) {
+    // 添加标签到内容（确保在内容末尾且有换行）
+    if (!content.endsWith('\n')) {
+      content += '\n';
+    }
+    
+    // 拆分标签并格式化
+    const tags = tagsInput.split(/\s+/).filter(tag => tag);
+    const formattedTags = tags.map(tag => {
+      // 如果标签不以#开头，添加#
+      return tag.startsWith('#') ? tag : `#${tag}`;
+    }).join(' ');
+    
+    // 添加标签
+    if (formattedTags) {
+      content += `\n${formattedTags}`;
+    }
   }
   
-  // 获取设置信息
+  // 最终处理：修剪多余空行，确保格式干净
+  content = content.replace(/\n{3,}/g, '\n\n').trim();
+  
+  // 获取Webhook URL
   chrome.storage.sync.get('flomoSettings', (data) => {
     const settings = data.flomoSettings || {};
+    const webhookUrl = settings.webhookUrl;
     
-    if (!settings.webhookUrl) {
-      showToast('请先在设置中添加Webhook URL', 'error');
-      switchPage('settings');
+    if (!webhookUrl) {
+      showToast('请先在设置中配置Webhook URL', 'error');
+      setTimeout(() => switchPage('settings'), 1500);
       return;
     }
     
-    // 显示保存中状态
-    showToast('正在保存...', '');
-    
-    // 进行更详细的日志记录
-    console.log('准备发送到Flomo，内容:', content);
-    console.log('使用Webhook URL:', settings.webhookUrl);
-    
-    // 发送到Webhook
-    fetch(settings.webhookUrl, {
+    // 发送到Flomo服务
+    fetch(webhookUrl, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        content: content
-      })
+      body: JSON.stringify({ content: content })
     })
-    .then(response => {
-      console.log('Flomo API响应状态:', response.status);
-      console.log('响应头部:', [...response.headers.entries()]);
-      
-      // 检查响应是否为JSON
-      const contentType = response.headers.get('content-type');
-      if (contentType && contentType.includes('application/json')) {
-        return response.json().then(data => {
-          console.log('响应JSON数据:', data);
-          return {
-            originalResponse: response,
-            data: data
-          };
-        });
-      }
-      
-      // 非JSON响应，获取文本
-      return response.text().then(text => {
-        console.log('响应文本内容:', text);
-        try {
-          // 尝试解析为JSON
-          const jsonData = JSON.parse(text);
-          return {
-            originalResponse: response,
-            data: jsonData
-          };
-        } catch (e) {
-          // 不是JSON，返回原始响应
-          return {
-            originalResponse: response,
-            text: text,
-            data: { code: response.status === 200 ? 0 : -1 }
-          };
-        }
-      });
-    })
-    .then(result => {
-      const response = result.originalResponse;
-      const data = result.data;
-      
-      console.log('处理结果:', result);
-      
-      // 如果HTTP状态码为200，默认视为成功
-      const httpSuccess = response.status === 200;
-      
-      // 检查API返回的code值（如果存在）
-      const apiSuccess = data && (data.code === 0 || data.code === undefined && data.status !== 'error');
-      
-      // 综合判断是否成功
-      const isSuccess = httpSuccess && (apiSuccess || !data);
-      
-      if (isSuccess) {
-        // 先显示成功消息
+    .then(response => response.json())
+    .then(data => {
+      if (data.code === 0) {
         showToast('保存成功', 'success');
-        // 然后保存到历史记录
-        saveToHistory(content);
-        // 最后清空编辑器
+        
+        // 保存到历史记录
+        saveToHistory({
+          content: content,
+          timestamp: Date.now(),
+          source: currentTab ? currentTab.url : '',
+          title: currentTab ? currentTab.title : ''
+        });
+        
+        // 清空编辑器
         clearEditor();
       } else {
-        const errorMsg = data && data.message ? data.message : result.text || '未知错误';
-        console.error('保存失败:', errorMsg);
-        showToast(`保存失败: ${errorMsg}`, 'error');
+        throw new Error(data.message || '保存失败');
       }
     })
     .catch(error => {
-      console.error('发送到Flomo Webhook时出错:', error);
-      showToast('网络错误，已保存到离线内容', 'error');
-      saveOffline(content);
+      console.error('保存失败:', error);
+      
+      // 保存到离线存储
+      saveOffline({
+        content: content,
+        timestamp: Date.now(),
+        source: currentTab ? currentTab.url : '',
+        title: currentTab ? currentTab.title : ''
+      });
+      
+      showToast('网络连接失败，已保存到离线存储', 'error');
     });
   });
 }
@@ -702,6 +801,10 @@ function loadHistory() {
 // 清空编辑器内容
 function clearEditor() {
   elements.editor.value = '';
+  // 清空图片数据
+  uploadedImages = [];
+  // 清空图片预览区域
+  elements.imagesPreview.innerHTML = '';
 }
 
 // 显示状态提示
@@ -837,4 +940,179 @@ function addDefaultTag() {
       updateTagSuggestions(settings.defaultTags);
     });
   });
+}
+
+// 处理图片上传
+function handleImageUpload(event) {
+  const files = event.target.files;
+  if (!files || files.length === 0) return;
+  
+  // 处理每个上传的文件
+  Array.from(files).forEach(file => {
+    if (!file.type.startsWith('image/')) {
+      showToast('只能上传图片文件', 'error');
+      return;
+    }
+    
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const imageData = e.target.result;
+      addImageToPreview(imageData, file.name);
+    };
+    reader.readAsDataURL(file);
+  });
+  
+  // 清空文件输入框，允许连续上传相同文件
+  event.target.value = '';
+}
+
+// 添加图片到预览区域
+function addImageToPreview(imageData, imageName) {
+  // 创建图片预览元素
+  const imageItem = document.createElement('div');
+  imageItem.className = 'image-item';
+  
+  // 创建图片元素
+  const img = document.createElement('img');
+  img.src = imageData;
+  img.alt = imageName || '上传的图片';
+  img.title = imageName || '上传的图片';
+  
+  // 创建删除按钮
+  const removeBtn = document.createElement('button');
+  removeBtn.className = 'remove-image';
+  removeBtn.innerHTML = '×';
+  removeBtn.title = '删除图片';
+  
+  // 创建预览按钮
+  const previewBtn = document.createElement('button');
+  previewBtn.className = 'preview-image';
+  previewBtn.innerHTML = '👁️';
+  previewBtn.title = '预览图片';
+  
+  // 图片索引，用于删除操作
+  const imageIndex = uploadedImages.length;
+  
+  // 添加删除事件
+  removeBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    removeImage(imageIndex);
+  });
+  
+  // 添加预览事件
+  previewBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    previewImage(imageData);
+  });
+  
+  // 图片点击也可以预览
+  img.addEventListener('click', () => {
+    previewImage(imageData);
+  });
+  
+  // 组装并添加到预览区域
+  imageItem.appendChild(img);
+  imageItem.appendChild(removeBtn);
+  imageItem.appendChild(previewBtn);
+  elements.imagesPreview.appendChild(imageItem);
+  
+  // 保存图片数据
+  uploadedImages.push({
+    data: imageData,
+    name: imageName || `image_${Date.now()}`
+  });
+  
+  // 插入图片Markdown到编辑器
+  insertImageMarkdown(imageData, imageName);
+}
+
+// 图片预览功能
+function previewImage(imageData) {
+  // 获取遮罩层和图片元素
+  const overlay = elements.imageViewerOverlay;
+  const img = overlay.querySelector('.image-viewer-img');
+  
+  // 设置图片源
+  img.src = imageData;
+  
+  // 显示遮罩层
+  overlay.style.display = 'flex';
+  document.body.style.overflow = 'hidden'; // 阻止滚动
+}
+
+// 移除图片
+function removeImage(index) {
+  if (index >= 0 && index < uploadedImages.length) {
+    // 获取要删除的图片数据
+    const imageToRemove = uploadedImages[index];
+    
+    // 从数组中删除
+    uploadedImages.splice(index, 1);
+    
+    // 重新渲染所有图片预览，确保索引正确
+    refreshImagePreviews();
+  }
+}
+
+// 重新渲染图片预览区域
+function refreshImagePreviews() {
+  // 清空预览区域
+  elements.imagesPreview.innerHTML = '';
+  
+  // 重新添加所有图片
+  uploadedImages.forEach((image, newIndex) => {
+    // 创建图片预览元素
+    const imageItem = document.createElement('div');
+    imageItem.className = 'image-item';
+    
+    // 创建图片元素
+    const img = document.createElement('img');
+    img.src = image.data;
+    img.alt = image.name || '上传的图片';
+    img.title = image.name || '上传的图片';
+    
+    // 创建删除按钮
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'remove-image';
+    removeBtn.innerHTML = '×';
+    removeBtn.title = '删除图片';
+    
+    // 创建预览按钮
+    const previewBtn = document.createElement('button');
+    previewBtn.className = 'preview-image';
+    previewBtn.innerHTML = '👁️';
+    previewBtn.title = '预览图片';
+    
+    // 添加删除事件，使用新的索引
+    removeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      removeImage(newIndex);
+    });
+    
+    // 添加预览事件
+    previewBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      previewImage(image.data);
+    });
+    
+    // 图片点击也可以预览
+    img.addEventListener('click', () => {
+      previewImage(image.data);
+    });
+    
+    // 组装并添加到预览区域
+    imageItem.appendChild(img);
+    imageItem.appendChild(removeBtn);
+    imageItem.appendChild(previewBtn);
+    elements.imagesPreview.appendChild(imageItem);
+  });
+}
+
+// 插入图片Markdown到编辑器
+function insertImageMarkdown(imageData, imageName) {
+  // 不再在编辑器中插入Markdown占位符
+  // 图片数据已经存储在uploadedImages数组中，会在保存时自动处理
+  
+  // 不修改编辑器内容，也不需要改变光标位置
+  // 只有在实际保存时才会处理图片
 } 

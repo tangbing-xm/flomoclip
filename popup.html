@@ -23,6 +23,17 @@
       <div class="editor-container">
         <textarea id="editor" placeholder="在此输入或粘贴要保存的内容..."></textarea>
         
+        <!-- 添加图片上传和预览区域 -->
+        <div class="images-container" id="images-container">
+          <div class="images-preview" id="images-preview"></div>
+          <div class="images-actions">
+            <button id="btn-add-image" class="secondary-btn small-btn" title="添加图片">
+              <span class="btn-icon">📷</span> 添加图片
+            </button>
+            <input type="file" id="image-upload" accept="image/*" style="display: none;">
+          </div>
+        </div>
+        
         <div class="tags-container">
           <div class="tags-input-container">
             <input type="text" id="tag-input" placeholder="添加标签 (以空格分隔)">

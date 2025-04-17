@@ -5,7 +5,7 @@
 chrome.runtime.onInstalled.addListener(() => {
   console.log('FlomoClip扩展已安装或更新');
   
-  // 创建右键菜单
+  // 创建文本选择右键菜单
   chrome.contextMenus.create({
     id: 'saveToFlomo',
     title: '保存到Flomo',
@@ -16,6 +16,19 @@ chrome.runtime.onInstalled.addListener(() => {
     id: 'saveAndEditToFlomo',
     title: '保存并编辑到Flomo',
     contexts: ['selection']
+  });
+  
+  // 创建图片右键菜单
+  chrome.contextMenus.create({
+    id: 'saveImageToFlomo',
+    title: '保存图片到Flomo',
+    contexts: ['image']
+  });
+  
+  chrome.contextMenus.create({
+    id: 'saveImageAndEditToFlomo',
+    title: '保存图片并编辑到Flomo',
+    contexts: ['image']
   });
   
   // 初始化存储默认设置
@@ -43,6 +56,12 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   } else if (info.menuItemId === 'saveAndEditToFlomo') {
     // 打开编辑窗口
     saveToFlomo(info.selectionText, tab, true);
+  } else if (info.menuItemId === 'saveImageToFlomo') {
+    // 直接保存图片
+    saveImageToFlomo(info.srcUrl, tab, false);
+  } else if (info.menuItemId === 'saveImageAndEditToFlomo') {
+    // 打开编辑窗口
+    saveImageToFlomo(info.srcUrl, tab, true);
   }
 });
 
@@ -259,5 +278,118 @@ function saveOffline(content) {
     setTimeout(() => {
       chrome.action.setBadgeText({ text: '' });
     }, 3000);
+  });
+}
+
+// 监听来自内容脚本或弹出窗口的消息
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === 'saveSelectedText') {
+    // 获取当前标签页信息
+    chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+      if (tabs.length > 0) {
+        saveToFlomo(message.text, tabs[0], false);
+      }
+    });
+  } else if (message.action === 'captureVisibleTab') {
+    // 截取当前标签页可见区域
+    chrome.tabs.captureVisibleTab(null, {format: 'png'}, (dataUrl) => {
+      sendResponse({imageData: dataUrl});
+    });
+    return true; // 表示异步响应
+  } else if (message.action === 'getSelectedImage') {
+    // 获取当前标签页
+    chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+      if (tabs.length === 0) {
+        sendResponse({error: '无法获取当前标签页'});
+        return;
+      }
+      
+      // 在当前标签页执行内容脚本获取选中图片
+      chrome.scripting.executeScript({
+        target: {tabId: tabs[0].id},
+        function: getSelectedImages
+      }, (results) => {
+        if (chrome.runtime.lastError) {
+          sendResponse({error: chrome.runtime.lastError.message});
+          return;
+        }
+        
+        if (results && results[0] && results[0].result) {
+          sendResponse({imageUrls: results[0].result});
+        } else {
+          sendResponse({imageUrls: []});
+        }
+      });
+    });
+    return true; // 表示异步响应
+  }
+});
+
+// 获取选中的图片的函数
+function getSelectedImages() {
+  const images = document.querySelectorAll('img');
+  const selection = window.getSelection();
+  
+  // 如果没有选择，则返回空数组
+  if (!selection || !selection.rangeCount) return [];
+  
+  const selectionRange = selection.getRangeAt(0);
+  const selectionRect = selectionRange.getBoundingClientRect();
+  
+  // 找出与选择区域重叠的图片
+  const selectedImages = Array.from(images).filter(img => {
+    const imgRect = img.getBoundingClientRect();
+    
+    return (
+      imgRect.left < selectionRect.right &&
+      imgRect.right > selectionRect.left &&
+      imgRect.top < selectionRect.bottom &&
+      imgRect.bottom > selectionRect.top
+    );
+  });
+  
+  // 返回图片URL数组
+  return selectedImages.map(img => img.src);
+}
+
+// 保存图片到Flomo
+function saveImageToFlomo(imageUrl, tab, shouldEdit) {
+  if (!imageUrl) {
+    console.log('没有选中任何图片');
+    return;
+  }
+
+  // 获取设置
+  chrome.storage.sync.get('flomoSettings', (data) => {
+    const settings = data.flomoSettings || {};
+    
+    // 提取文件名作为图片描述
+    const imageName = imageUrl.split('/').pop().split('?')[0]; // 提取文件名
+    // 使用简短的占位符
+    const imageDisplayText = `图片: ${imageName}`;
+    
+    let content = imageDisplayText;
+    
+    // 根据设置添加网页链接和标题
+    if (settings.autoAddLink && tab.url) {
+      content += `\n\n来源：[${tab.title || '网页'}](${tab.url})`;
+    } else if (settings.autoAddTitle && tab.title) {
+      content += `\n\n来源：${tab.title}`;
+    }
+    
+    if (shouldEdit) {
+      // 打开编辑窗口
+      chrome.storage.local.set({ 
+        'editContent': content,
+        'editImageUrl': imageUrl  // 存储图片URL以便弹出窗口加载
+      }, () => {
+        chrome.action.openPopup();
+      });
+    } else {
+      // 在发送前构建完整的Markdown
+      const fullContent = content.replace(imageDisplayText, `![${imageName}](${imageUrl})`);
+      // 直接发送到Flomo服务
+      sendToFlomoWebhook(fullContent);
+    }
   });
 } 
