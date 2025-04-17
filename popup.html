@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FlomoClip</title>
+  <link rel="stylesheet" href="css/popup.css">
+</head>
+<body>
+  <div class="container">
+    <!-- 顶部导航 -->
+    <div class="header">
+      <div class="logo">FlomoClip</div>
+      <div class="nav">
+        <button id="btn-editor" class="nav-btn active">编辑器</button>
+        <button id="btn-history" class="nav-btn">历史</button>
+        <button id="btn-settings" class="nav-btn">设置</button>
+      </div>
+    </div>
+    
+    <!-- 编辑器页面 -->
+    <div id="editor-page" class="page active">
+      <div class="editor-container">
+        <textarea id="editor" placeholder="在此输入或粘贴要保存的内容..."></textarea>
+        
+        <div class="tags-container">
+          <div class="tags-input-container">
+            <input type="text" id="tag-input" placeholder="添加标签 (以空格分隔)">
+          </div>
+          <div class="tags-suggestions" id="tags-suggestions">
+            <!-- 标签建议会在这里动态添加 -->
+          </div>
+        </div>
+        
+        <div class="source-info" id="source-info">
+          <!-- 来源信息会在这里动态添加 -->
+        </div>
+        
+        <div class="action-buttons">
+          <button id="btn-save" class="primary-btn">保存到Flomo</button>
+          <button id="btn-clear" class="secondary-btn">清空</button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- 历史记录页面 -->
+    <div id="history-page" class="page">
+      <div class="history-list" id="history-list">
+        <!-- 历史记录会在这里动态添加 -->
+        <div class="empty-state">
+          <p>暂无历史记录</p>
+        </div>
+      </div>
+    </div>
+    
+    <!-- 设置页面 -->
+    <div id="settings-page" class="page">
+      <div class="settings-container">
+        <div class="settings-group">
+          <h3>账号设置</h3>
+          <div class="settings-item">
+            <label for="webhook-url">Webhook URL</label>
+            <input type="text" id="webhook-url" placeholder="输入Flomo Webhook URL" value="https://flomoapp.com/iwh/NTkyNTkx/ca8398dd3eb297702c173363355f36a7/">
+            <p class="settings-desc">已预设你的专属Webhook URL</p>
+            <button id="btn-test-webhook" class="secondary-btn">测试连接</button>
+          </div>
+          <div id="login-status" class="login-status">
+            <!-- 登录状态信息 -->
+          </div>
+        </div>
+        
+        <div class="settings-group">
+          <h3>保存选项</h3>
+          <div class="settings-item">
+            <label class="switch-label">
+              <input type="checkbox" id="auto-add-link" checked>
+              <span class="switch"></span>
+              自动添加网页链接
+            </label>
+          </div>
+          <div class="settings-item">
+            <label class="switch-label">
+              <input type="checkbox" id="auto-add-title" checked>
+              <span class="switch"></span>
+              自动添加网页标题
+            </label>
+          </div>
+        </div>
+        
+        <div class="settings-group">
+          <h3>常用标签</h3>
+          <div class="settings-item">
+            <div class="tag-input-container">
+              <input type="text" id="default-tags" placeholder="输入常用标签 (以空格分隔)">
+              <button id="btn-add-tag" class="tag-add-btn" title="添加标签">+</button>
+            </div>
+            <div id="default-tags-list" class="default-tags-list">
+              <!-- 常用标签会在这里动态添加 -->
+            </div>
+          </div>
+        </div>
+        
+        <div class="settings-group">
+          <h3>离线内容</h3>
+          <div class="settings-item">
+            <button id="btn-sync-offline" class="primary-btn">同步离线内容</button>
+            <p id="offline-count" class="settings-desc">当前有 0 条离线内容</p>
+          </div>
+        </div>
+        
+        <div class="action-buttons">
+          <button id="btn-save-settings" class="primary-btn">保存设置</button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- 状态提示 -->
+    <div id="status-toast" class="status-toast"></div>
+  </div>
+  
+  <script src="js/popup.js"></script>
+</body>
+</html> 
