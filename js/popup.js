@@ -73,11 +73,19 @@ document.addEventListener('DOMContentLoaded', () => {
   updateOfflineCount();
   
   // 检查是否有来自背景脚本的编辑内容和图片
-  chrome.storage.local.get(['editContent', 'editImageUrl'], (data) => {
+  chrome.storage.local.get(['editContent', 'editImageUrl', 'draftContent', 'draftTagInput'], (data) => {
     if (data.editContent) {
       elements.editor.value = data.editContent;
       // 清除存储的编辑内容
       chrome.storage.local.remove('editContent');
+    } else if (data.draftContent) {
+      // 恢复草稿内容
+      elements.editor.value = data.draftContent;
+    }
+    
+    // 恢复草稿标签
+    if (data.draftTagInput) {
+      elements.tagInput.value = data.draftTagInput;
     }
     
     // 加载图片（如果有）
@@ -116,10 +124,20 @@ function fetchSelectedImages() {
 
 // 设置事件监听器
 function setupEventListeners() {
+  // 编辑器内容变化时自动保存草稿
+  elements.editor.addEventListener('input', saveDraft);
+  elements.tagInput.addEventListener('input', saveDraft);
+  
   // 导航切换
   elements.btnEditor.addEventListener('click', () => switchPage('editor'));
-  elements.btnHistory.addEventListener('click', () => switchPage('history'));
-  elements.btnSettings.addEventListener('click', () => switchPage('settings'));
+  elements.btnHistory.addEventListener('click', () => {
+    saveDraft(); // 切换页面前保存草稿
+    switchPage('history');
+  });
+  elements.btnSettings.addEventListener('click', () => {
+    saveDraft(); // 切换页面前保存草稿
+    switchPage('settings');
+  });
   
   // 编辑器按钮
   elements.btnSave.addEventListener('click', saveContent);
@@ -171,6 +189,20 @@ function setupEventListeners() {
   
   // 创建图片预览遮罩层
   createImageViewerOverlay();
+  
+  // 窗口关闭前保存草稿
+  window.addEventListener('beforeunload', saveDraft);
+}
+
+// 自动保存草稿内容
+function saveDraft() {
+  const content = elements.editor.value;
+  const tagInput = elements.tagInput.value;
+  
+  chrome.storage.local.set({
+    'draftContent': content,
+    'draftTagInput': tagInput
+  });
 }
 
 // 创建图片预览遮罩层
