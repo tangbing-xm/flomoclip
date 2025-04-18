@@ -44,7 +44,10 @@ const elements = {
   statusToast: document.getElementById('status-toast'),
   
   // 图片预览遮罩层
-  imageViewerOverlay: null
+  imageViewerOverlay: null,
+  
+  // 富文本编辑器容器
+  editorContainer: document.getElementById('rich-editor-container')
 };
 
 // 当前活动标签页信息
@@ -73,14 +76,28 @@ document.addEventListener('DOMContentLoaded', () => {
   updateOfflineCount();
   
   // 检查是否有来自背景脚本的编辑内容和图片
-  chrome.storage.local.get(['editContent', 'editImageUrl', 'draftContent', 'draftTagInput'], (data) => {
+  chrome.storage.local.get(['editContent', 'editImageUrl', 'draftContent', 'draftTagInput', 'draftHtmlContent'], (data) => {
     if (data.editContent) {
+      // 使用hidden的textarea保存Markdown内容
       elements.editor.value = data.editContent;
+      
+      // 在富文本编辑器中显示内容
+      if (elements.editorContainer) {
+        elements.editorContainer.innerHTML = data.editContent.replace(/\n/g, '<br>');
+      }
+      
       // 清除存储的编辑内容
       chrome.storage.local.remove('editContent');
     } else if (data.draftContent) {
       // 恢复草稿内容
       elements.editor.value = data.draftContent;
+      
+      // 如果有HTML内容，优先使用它
+      if (data.draftHtmlContent && elements.editorContainer) {
+        elements.editorContainer.innerHTML = data.draftHtmlContent;
+      } else if (elements.editorContainer) {
+        elements.editorContainer.innerHTML = data.draftContent.replace(/\n/g, '<br>');
+      }
     }
     
     // 恢复草稿标签
@@ -125,7 +142,13 @@ function fetchSelectedImages() {
 // 设置事件监听器
 function setupEventListeners() {
   // 编辑器内容变化时自动保存草稿
-  elements.editor.addEventListener('input', saveDraft);
+  if (elements.editorContainer) {
+    elements.editorContainer.addEventListener('input', saveDraft);
+    // 监听粘贴事件，确保粘贴的是纯文本
+    elements.editorContainer.addEventListener('paste', handlePaste);
+  } else {
+    elements.editor.addEventListener('input', saveDraft);
+  }
   elements.tagInput.addEventListener('input', saveDraft);
   
   // 导航切换
@@ -142,6 +165,28 @@ function setupEventListeners() {
   // 编辑器按钮
   elements.btnSave.addEventListener('click', saveContent);
   elements.btnClear.addEventListener('click', clearEditor);
+  
+  // 文本格式化按钮
+  const btnBold = document.getElementById('btn-bold');
+  const btnUnderline = document.getElementById('btn-underline');
+  const btnOrderedList = document.getElementById('btn-ordered-list');
+  const btnUnorderedList = document.getElementById('btn-unordered-list');
+  
+  if (btnBold) {
+    btnBold.addEventListener('click', () => formatText('bold'));
+  }
+  
+  if (btnUnderline) {
+    btnUnderline.addEventListener('click', () => formatText('underline'));
+  }
+  
+  if (btnOrderedList) {
+    btnOrderedList.addEventListener('click', () => formatText('orderedList'));
+  }
+  
+  if (btnUnorderedList) {
+    btnUnorderedList.addEventListener('click', () => formatText('unorderedList'));
+  }
   
   // 标签输入
   elements.tagInput.addEventListener('keydown', handleTagInput);
@@ -194,13 +239,42 @@ function setupEventListeners() {
   window.addEventListener('beforeunload', saveDraft);
 }
 
+// 处理粘贴事件
+function handlePaste(e) {
+  // 阻止默认粘贴行为
+  e.preventDefault();
+  
+  // 从剪贴板获取纯文本
+  const text = (e.originalEvent || e).clipboardData.getData('text/plain');
+  
+  // 使用 execCommand 将纯文本插入到编辑器
+  document.execCommand('insertText', false, text);
+}
+
 // 自动保存草稿内容
 function saveDraft() {
-  const content = elements.editor.value;
+  // 获取富文本编辑器内容
+  const htmlContent = elements.editorContainer ? elements.editorContainer.innerHTML : '';
+  
+  // 从富文本编辑器中获取纯文本，用于保存到Markdown编辑器
+  let content = '';
+  if (elements.editorContainer) {
+    // 临时创建一个div来获取富文本的纯文本内容
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = htmlContent;
+    content = tempDiv.textContent || tempDiv.innerText || '';
+    
+    // 同步到隐藏的textarea以便保存和发送
+    elements.editor.value = content;
+  } else {
+    content = elements.editor.value;
+  }
+  
   const tagInput = elements.tagInput.value;
   
   chrome.storage.local.set({
     'draftContent': content,
+    'draftHtmlContent': htmlContent,
     'draftTagInput': tagInput
   });
 }
@@ -484,7 +558,68 @@ function handleTagInput(event) {
 // 保存内容到Flomo
 function saveContent() {
   // 获取编辑器内容
-  let content = elements.editor.value.trim();
+  let content;
+  
+  if (elements.editorContainer) {
+    // 如果使用富文本编辑器，先将内容同步到隐藏的textarea
+    let htmlContent = elements.editorContainer.innerHTML;
+    
+    // 创建临时DOM元素来处理HTML
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = htmlContent;
+    
+    // 处理列表
+    const convertListItems = (listElements, isOrdered) => {
+      for (let i = 0; i < listElements.length; i++) {
+        const list = listElements[i];
+        const items = list.querySelectorAll('li');
+        const textItems = [];
+        
+        for (let j = 0; j < items.length; j++) {
+          const prefix = isOrdered ? `${j + 1}. ` : '- ';
+          textItems.push(prefix + items[j].textContent);
+        }
+        
+        // 创建替换文本节点
+        const textNode = document.createTextNode(textItems.join('\n'));
+        list.parentNode.replaceChild(textNode, list);
+      }
+    };
+    
+    // 转换有序和无序列表为Markdown格式
+    convertListItems(tempDiv.querySelectorAll('ol'), true);
+    convertListItems(tempDiv.querySelectorAll('ul'), false);
+    
+    // 处理加粗文本
+    const boldElements = tempDiv.querySelectorAll('b, strong');
+    for (let i = 0; i < boldElements.length; i++) {
+      const boldElement = boldElements[i];
+      const text = boldElement.textContent;
+      const markdownBold = `**${text}**`;
+      const textNode = document.createTextNode(markdownBold);
+      boldElement.parentNode.replaceChild(textNode, boldElement);
+    }
+    
+    // 处理下划线文本
+    const underlineElements = tempDiv.querySelectorAll('u');
+    for (let i = 0; i < underlineElements.length; i++) {
+      const underlineElement = underlineElements[i];
+      const text = underlineElement.textContent;
+      // 使用HTML下划线标签
+      const markdownUnderline = `<u>${text}</u>`;
+      const textNode = document.createTextNode(markdownUnderline);
+      underlineElement.parentNode.replaceChild(textNode, underlineElement);
+    }
+    
+    // 将<br>替换为换行符
+    content = tempDiv.textContent.replace(/<br>/g, '\n');
+    
+    // 更新隐藏的textarea
+    elements.editor.value = content;
+  } else {
+    // 使用普通textarea
+    content = elements.editor.value.trim();
+  }
   
   // 检查是否有内容
   if (!content && uploadedImages.length === 0) {
@@ -821,7 +956,32 @@ function loadHistory() {
       
       // 点击历史记录项，将内容加载到编辑器
       historyItem.addEventListener('click', () => {
+        // 更新隐藏的textarea
         elements.editor.value = item.content;
+        
+        // 更新富文本编辑器（如果存在）
+        if (elements.editorContainer) {
+          // 将Markdown内容转换为HTML以在富文本编辑器中显示
+          let htmlContent = item.content
+            // 处理加粗 **text** -> <b>text</b>
+            .replace(/\*\*(.*?)\*\*/g, '<b>$1</b>')
+            // 处理下划线已经是HTML标签
+            // 处理有序列表 1. item -> <ol><li>item</li></ol>
+            .replace(/(\d+\.\s*(.*?)(\n|$))+/g, function(match) {
+              const items = match.split(/\n/).filter(line => line.trim());
+              return '<ol>' + items.map(item => `<li>${item.replace(/^\d+\.\s*/, '')}</li>`).join('') + '</ol>';
+            })
+            // 处理无序列表 - item -> <ul><li>item</li></ul>
+            .replace(/(\-\s*(.*?)(\n|$))+/g, function(match) {
+              const items = match.split(/\n/).filter(line => line.trim());
+              return '<ul>' + items.map(item => `<li>${item.replace(/^\-\s*/, '')}</li>`).join('') + '</ul>';
+            })
+            // 处理换行
+            .replace(/\n/g, '<br>');
+          
+          elements.editorContainer.innerHTML = htmlContent;
+        }
+        
         switchPage('editor');
       });
       
@@ -832,11 +992,25 @@ function loadHistory() {
 
 // 清空编辑器内容
 function clearEditor() {
+  // 清空隐藏的textarea
   elements.editor.value = '';
+  
+  // 清空富文本编辑器（如果存在）
+  if (elements.editorContainer) {
+    elements.editorContainer.innerHTML = '';
+  }
+  
   // 清空图片数据
   uploadedImages = [];
+  
   // 清空图片预览区域
   elements.imagesPreview.innerHTML = '';
+  
+  // 清空标签输入
+  elements.tagInput.value = '';
+  
+  // 清空本地存储的草稿内容
+  chrome.storage.local.remove(['draftContent', 'draftHtmlContent', 'draftTagInput']);
 }
 
 // 显示状态提示
@@ -1147,4 +1321,52 @@ function insertImageMarkdown(imageData, imageName) {
   
   // 不修改编辑器内容，也不需要改变光标位置
   // 只有在实际保存时才会处理图片
+}
+
+// 格式化文本 - 所见即所得版本
+function formatText(type) {
+  // 确保富文本编辑器存在并聚焦
+  if (!elements.editorContainer) return;
+  
+  elements.editorContainer.focus();
+  
+  let command = '';
+  let value = null;
+  
+  switch (type) {
+    case 'bold':
+      command = 'bold';
+      break;
+      
+    case 'underline':
+      command = 'underline';
+      break;
+      
+    case 'orderedList':
+      // 先检查是否已经是无序列表，如果是则先移除
+      if (isListActive('unorderedList')) {
+        document.execCommand('insertUnorderedList', false, null);
+      }
+      command = 'insertOrderedList';
+      break;
+      
+    case 'unorderedList':
+      // 先检查是否已经是有序列表，如果是则先移除
+      if (isListActive('orderedList')) {
+        document.execCommand('insertOrderedList', false, null);
+      }
+      command = 'insertUnorderedList';
+      break;
+  }
+  
+  if (command) {
+    document.execCommand(command, false, value);
+    saveDraft(); // 保存更改
+  }
+}
+
+// 检查列表状态
+function isListActive(type) {
+  const command = type === 'orderedList' ? 'insertOrderedList' : 'insertUnorderedList';
+  return document.queryCommandState(command);
 } 

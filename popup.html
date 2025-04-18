@@ -10,7 +10,7 @@
   <div class="container">
     <!-- 顶部导航 -->
     <div class="header">
-      <div class="logo">FlomoClip</div>
+      <div class="logo">FlomoClip 🍪</div>
       <div class="nav">
         <button id="btn-editor" class="nav-btn active">编辑器</button>
         <button id="btn-history" class="nav-btn">历史</button>
@@ -21,12 +21,29 @@
     <!-- 编辑器页面 -->
     <div id="editor-page" class="page active">
       <div class="editor-container">
-        <textarea id="editor" placeholder="在此输入或粘贴要保存的内容..."></textarea>
+        <!-- 富文本编辑器容器 -->
+        <div id="rich-editor-container" class="rich-editor-container" contenteditable="true" placeholder="在此输入或粘贴要保存的内容..."></div>
+        <textarea id="editor" style="display: none;"></textarea>
         
         <!-- 添加图片上传和预览区域 -->
         <div class="images-container" id="images-container">
           <div class="images-preview" id="images-preview"></div>
           <div class="images-actions">
+            <!-- 文本格式化按钮 -->
+            <button id="btn-bold" class="format-btn small-btn" title="加粗文本">
+              <span class="btn-icon">B</span>
+            </button>
+            <button id="btn-underline" class="format-btn small-btn" title="下划线">
+              <span class="btn-icon">U</span>
+            </button>
+            <button id="btn-ordered-list" class="format-btn small-btn" title="有序列表">
+              <span class="btn-icon">1.</span>
+            </button>
+            <button id="btn-unordered-list" class="format-btn small-btn" title="无序列表">
+              <span class="btn-icon">•</span>
+            </button>
+            
+            <!-- 添加图片按钮放在最右侧 -->
             <button id="btn-add-image" class="secondary-btn small-btn" title="添加图片">
               <span class="btn-icon">📷</span> 添加图片
             </button>
