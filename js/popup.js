@@ -357,9 +357,28 @@ function switchPage(page) {
 // 更新来源信息显示
 function updateSourceInfo() {
   if (currentTab) {
-    elements.sourceInfo.innerHTML = `
-      <div>来源：<a href="${currentTab.url}" target="_blank">${currentTab.title}</a></div>
-    `;
+    // 获取设置，只有在设置允许的情况下才显示来源信息
+    chrome.storage.sync.get('flomoSettings', (data) => {
+      const settings = data.flomoSettings || {
+        autoAddLink: true,
+        autoAddTitle: true
+      };
+      
+      if (settings.autoAddLink || settings.autoAddTitle) {
+        if (settings.autoAddLink) {
+          elements.sourceInfo.innerHTML = `
+            <div>来源：<a href="${currentTab.url}" target="_blank">${currentTab.title}</a></div>
+          `;
+        } else if (settings.autoAddTitle) {
+          elements.sourceInfo.innerHTML = `
+            <div>来源：${currentTab.title}</div>
+          `;
+        }
+      } else {
+        // 如果都不选，则清空来源信息
+        elements.sourceInfo.innerHTML = '';
+      }
+    });
   }
 }
 
@@ -535,6 +554,13 @@ function addTagToEditor(tag) {
   } else {
     elements.editor.value = `${currentContent}\n\n${tag}`;
   }
+  
+  // 更新富文本编辑器内容
+  if (elements.editorContainer) {
+    // 将编辑器内容转换为HTML并更新富文本编辑器
+    let htmlContent = elements.editor.value.replace(/\n/g, '<br>');
+    elements.editorContainer.innerHTML = htmlContent;
+  }
 }
 
 // 处理标签输入
@@ -647,44 +673,51 @@ function saveContent() {
     });
   }
   
-  // 获取来源信息，确保将source-info中的链接添加到内容中
-  const sourceInfoElement = elements.sourceInfo;
-  if (sourceInfoElement && sourceInfoElement.textContent.trim() && !content.includes('来源：')) {
-    const sourceLink = sourceInfoElement.querySelector('a');
-    if (sourceLink) {
-      const sourceLinkHtml = `\n\n来源：[${sourceLink.textContent}](${sourceLink.href})`;
-      content += sourceLinkHtml;
-    }
-  }
-  
-  // 获取标签输入的值
-  const tagsInput = elements.tagInput.value.trim();
-  if (tagsInput) {
-    // 添加标签到内容（确保在内容末尾且有换行）
-    if (!content.endsWith('\n')) {
-      content += '\n';
-    }
-    
-    // 拆分标签并格式化
-    const tags = tagsInput.split(/\s+/).filter(tag => tag);
-    const formattedTags = tags.map(tag => {
-      // 如果标签不以#开头，添加#
-      return tag.startsWith('#') ? tag : `#${tag}`;
-    }).join(' ');
-    
-    // 添加标签
-    if (formattedTags) {
-      content += `\n${formattedTags}`;
-    }
-  }
-  
-  // 最终处理：修剪多余空行，确保格式干净
-  content = content.replace(/\n{3,}/g, '\n\n').trim();
-  
-  // 获取Webhook URL
+  // 获取来源信息，根据设置决定是否添加到内容中
   chrome.storage.sync.get('flomoSettings', (data) => {
     const settings = data.flomoSettings || {};
     const webhookUrl = settings.webhookUrl;
+    let finalContent = content;
+    
+    // 获取标签输入的值
+    const tagsInput = elements.tagInput.value.trim();
+    if (tagsInput) {
+      // 添加标签到内容（确保在内容末尾且有换行）
+      if (!finalContent.endsWith('\n')) {
+        finalContent += '\n';
+      }
+      
+      // 拆分标签并格式化
+      const tags = tagsInput.split(/\s+/).filter(tag => tag);
+      const formattedTags = tags.map(tag => {
+        // 如果标签不以#开头，添加#
+        return tag.startsWith('#') ? tag : `#${tag}`;
+      }).join(' ');
+      
+      // 添加标签
+      if (formattedTags) {
+        finalContent += `\n${formattedTags}`;
+      }
+    }
+    
+    // 最终处理：修剪多余空行，确保格式干净
+    finalContent = finalContent.replace(/\n{3,}/g, '\n\n').trim();
+    
+    // 只有在设置允许的情况下才添加来源信息
+    if ((settings.autoAddLink || settings.autoAddTitle) && 
+        !finalContent.includes('来源：')) {
+      const sourceInfoElement = elements.sourceInfo;
+      if (sourceInfoElement && sourceInfoElement.textContent.trim()) {
+        const sourceLink = sourceInfoElement.querySelector('a');
+        if (sourceLink && settings.autoAddLink) {
+          const sourceLinkHtml = `\n\n来源：[${sourceLink.textContent}](${sourceLink.href})`;
+          finalContent += sourceLinkHtml;
+        } else if (settings.autoAddTitle && sourceInfoElement.textContent) {
+          const sourceText = sourceInfoElement.textContent.trim();
+          finalContent += `\n\n${sourceText}`;
+        }
+      }
+    }
     
     if (!webhookUrl) {
       showToast('请先在设置中配置Webhook URL', 'error');
@@ -692,45 +725,50 @@ function saveContent() {
       return;
     }
     
-    // 发送到Flomo服务
+    // 显示发送中状态
+    showToast('发送中...', 'info');
+    elements.btnSave.disabled = true;
+    
+    // 发送请求到Flomo
     fetch(webhookUrl, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
+        'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ content: content })
+      body: JSON.stringify({
+        content: finalContent
+      })
     })
-    .then(response => response.json())
-    .then(data => {
-      if (data.code === 0) {
-        showToast('保存成功', 'success');
-        
-        // 保存到历史记录
-        saveToHistory({
-          content: content,
-          timestamp: Date.now(),
-          source: currentTab ? currentTab.url : '',
-          title: currentTab ? currentTab.title : ''
-        });
-        
-        // 清空编辑器
-        clearEditor();
-      } else {
-        throw new Error(data.message || '保存失败');
+    .then(response => {
+      if (!response.ok) {
+        throw new Error('网络错误');
       }
+      return response.json();
+    })
+    .then(data => {
+      if (data.code !== 0) {
+        throw new Error(data.message || '发送失败');
+      }
+      
+      // 发送成功，清空编辑器
+      clearEditor();
+      showToast('已成功保存到Flomo', 'success');
+      
+      // 保存到历史记录
+      saveToHistory(finalContent);
     })
     .catch(error => {
-      console.error('保存失败:', error);
+      console.error('发送失败:', error);
       
-      // 保存到离线存储
-      saveOffline({
-        content: content,
-        timestamp: Date.now(),
-        source: currentTab ? currentTab.url : '',
-        title: currentTab ? currentTab.title : ''
-      });
-      
-      showToast('网络连接失败，已保存到离线存储', 'error');
+      if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+        showToast('网络连接失败，内容已保存到离线', 'warning');
+        saveOffline(finalContent);
+      } else {
+        showToast(`发送失败: ${error.message}`, 'error');
+      }
+    })
+    .finally(() => {
+      elements.btnSave.disabled = false;
     });
   });
 }
