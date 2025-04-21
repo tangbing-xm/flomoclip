@@ -439,12 +439,28 @@ function validateWebhookUrl() {
     return;
   }
   
-  // 验证URL格式
-  const isValid = webhookUrl.startsWith('https://flomoapp.com/iwh/');
-  
-  if (isValid) {
-    updateLoginStatus(true);
-  } else {
+  // 更灵活的URL格式验证
+  try {
+    const url = new URL(webhookUrl);
+    const isValidProtocol = url.protocol === 'https:' || url.protocol === 'http:';
+    const isFlomoUrl = url.hostname.includes('flomoapp.com');
+    
+    // 宽松验证：只要是有效的URL就接受，但优先接受flomoapp.com域名
+    if (isValidProtocol) {
+      if (isFlomoUrl) {
+        updateLoginStatus(true);
+      } else {
+        console.warn('使用了非Flomo官方域名:', url.hostname);
+        // 依然接受其他域名，但给出警告
+        showToast('警告: 使用了非官方Flomo域名，可能无法正常工作', 'warning');
+        updateLoginStatus(true);
+      }
+    } else {
+      showToast('Webhook URL协议必须是http或https', 'error');
+      updateLoginStatus(false);
+    }
+  } catch (e) {
+    console.error('URL格式无效:', e);
     showToast('Webhook URL格式不正确', 'error');
     updateLoginStatus(false);
   }
@@ -729,23 +745,53 @@ function saveContent() {
     showToast('发送中...', 'info');
     elements.btnSave.disabled = true;
     
+    console.log('准备发送内容到Flomo:', finalContent);
+    console.log('使用Webhook URL:', webhookUrl);
+    
     // 发送请求到Flomo
     fetch(webhookUrl, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'Accept': 'application/json, text/plain, */*'
       },
       body: JSON.stringify({
         content: finalContent
       })
     })
     .then(response => {
+      console.log('收到响应状态码:', response.status);
+      console.log('响应头:', Object.fromEntries([...response.headers.entries()]));
+      
       if (!response.ok) {
-        throw new Error('网络错误');
+        return response.text().then(text => {
+          console.error('服务器响应内容:', text);
+          throw new Error(`网络错误 (${response.status}): ${text || response.statusText}`);
+        });
       }
-      return response.json();
+      
+      const contentType = response.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        return response.json();
+      } else {
+        return response.text().then(text => {
+          console.log('非JSON响应:', text);
+          try {
+            return JSON.parse(text);
+          } catch (e) {
+            console.error('解析响应失败:', e);
+            if (response.ok) {
+              return { code: 0, message: 'OK' };
+            } else {
+              throw new Error('无法解析服务器响应');
+            }
+          }
+        });
+      }
     })
     .then(data => {
+      console.log('解析后的响应数据:', data);
+      
       if (data.code !== 0) {
         throw new Error(data.message || '发送失败');
       }
@@ -758,13 +804,17 @@ function saveContent() {
       saveToHistory(finalContent);
     })
     .catch(error => {
-      console.error('发送失败:', error);
+      console.error('发送失败详细信息:', error);
       
-      if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+      if (error.message.includes('Failed to fetch') || 
+          error.message.includes('NetworkError') || 
+          error.message.includes('网络错误')) {
         showToast('网络连接失败，内容已保存到离线', 'warning');
         saveOffline(finalContent);
       } else {
         showToast(`发送失败: ${error.message}`, 'error');
+        // 也保存到离线，确保内容不丢失
+        saveOffline(finalContent);
       }
     })
     .finally(() => {
@@ -775,16 +825,33 @@ function saveContent() {
 
 // 保存到历史记录
 function saveToHistory(content) {
+  console.log('保存内容到历史记录:', content);
   chrome.storage.local.get('history', (data) => {
     const history = data.history || [];
-    history.unshift({
-      content: content,
-      timestamp: new Date().toISOString(),
-      source: currentTab ? {
-        title: currentTab.title,
-        url: currentTab.url
-      } : null
-    });
+    // 确保内容是对象格式，如果是字符串，则创建正确的对象结构
+    let historyItem;
+    if (typeof content === 'string') {
+      historyItem = {
+        content: content,
+        timestamp: new Date().toISOString(),
+        source: currentTab ? {
+          title: currentTab.title,
+          url: currentTab.url
+        } : null
+      };
+    } else {
+      // 如果已经是对象，确保结构完整
+      historyItem = {
+        content: content.content || content,
+        timestamp: content.timestamp || new Date().toISOString(),
+        source: content.source || (currentTab ? {
+          title: currentTab.title,
+          url: currentTab.url
+        } : null)
+      };
+    }
+    
+    history.unshift(historyItem);
     
     // 限制历史记录数量
     if (history.length > 50) {
@@ -797,19 +864,40 @@ function saveToHistory(content) {
 
 // 离线保存
 function saveOffline(content) {
+  console.log('保存内容到离线存储:', content);
   chrome.storage.local.get('offlineContents', (data) => {
     const offlineContents = data.offlineContents || [];
-    offlineContents.push({
-      content: content,
-      timestamp: new Date().toISOString(),
-      source: currentTab ? {
-        title: currentTab.title,
-        url: currentTab.url
-      } : null
-    });
+    
+    // 确保内容是对象格式
+    let offlineItem;
+    if (typeof content === 'string') {
+      offlineItem = {
+        content: content,
+        timestamp: new Date().toISOString(),
+        source: currentTab ? {
+          title: currentTab.title,
+          url: currentTab.url
+        } : null
+      };
+    } else {
+      // 如果已经是对象，确保结构完整
+      offlineItem = {
+        content: content.content || content,
+        timestamp: content.timestamp || new Date().toISOString(),
+        source: content.source || (currentTab ? {
+          title: currentTab.title,
+          url: currentTab.url
+        } : null)
+      };
+    }
+    
+    offlineContents.push(offlineItem);
     
     chrome.storage.local.set({ 'offlineContents': offlineContents }, () => {
       updateOfflineCount();
+      
+      // 显示保存成功信息
+      showToast('内容已保存到离线存储，可在网络恢复后同步', 'info');
     });
   });
 }
@@ -861,11 +949,13 @@ function syncOfflineContent() {
       
       const item = syncQueue.shift();
       console.log('同步内容:', item.content);
+      console.log('使用Webhook URL:', settings.webhookUrl);
       
       fetch(settings.webhookUrl, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Accept': 'application/json, text/plain, */*'
         },
         body: JSON.stringify({
           content: item.content
@@ -873,10 +963,14 @@ function syncOfflineContent() {
       })
       .then(response => {
         console.log('同步API响应状态:', response.status);
-        console.log('同步响应头:', [...response.headers.entries()]);
+        console.log('同步响应头:', Object.fromEntries([...response.headers.entries()]));
         
-        // 如果状态码是200，默认视为成功
-        const httpSuccess = response.status === 200;
+        if (!response.ok) {
+          return response.text().then(text => {
+            console.error('服务器错误响应内容:', text);
+            throw new Error(`网络错误 (${response.status}): ${text || response.statusText}`);
+          });
+        }
         
         // 检查响应是否为JSON
         const contentType = response.headers.get('content-type');
@@ -901,11 +995,12 @@ function syncOfflineContent() {
               data: jsonData
             };
           } catch (e) {
+            console.error('解析响应失败:', e);
             // 不是JSON，返回原始响应
             return {
               originalResponse: response,
               text: text,
-              data: { code: httpSuccess ? 0 : -1 }
+              data: { code: response.ok ? 0 : -1 }
             };
           }
         });
@@ -1080,18 +1175,29 @@ function testWebhook() {
   showToast('正在测试Webhook连接...', '');
   console.log('测试Webhook:', webhookUrl);
   
+  // 测试消息包含时间戳以避免缓存
+  const testMessage = `测试消息 - FlomoClip连接测试 - ${new Date().toLocaleString()} - ${Math.random().toString(36).substring(2, 8)}`;
+  
   fetch(webhookUrl, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
+      'Accept': 'application/json, text/plain, */*'
     },
     body: JSON.stringify({
-      content: `测试消息 - FlomoClip连接测试 - ${new Date().toLocaleString()}`
+      content: testMessage
     })
   })
   .then(response => {
     console.log('测试响应状态:', response.status);
-    console.log('测试响应头:', [...response.headers.entries()]);
+    console.log('测试响应头:', Object.fromEntries([...response.headers.entries()]));
+    
+    if (!response.ok) {
+      return response.text().then(text => {
+        console.error('测试服务器错误响应内容:', text);
+        throw new Error(`网络错误 (${response.status}): ${text || response.statusText}`);
+      });
+    }
     
     // 如果状态码是200，默认视为成功
     const httpSuccess = response.status === 200;
@@ -1121,6 +1227,7 @@ function testWebhook() {
           message: jsonData.message || ''
         };
       } catch (e) {
+        console.error('解析测试响应失败:', e);
         // 纯文本响应
         return { 
           success: httpSuccess,
