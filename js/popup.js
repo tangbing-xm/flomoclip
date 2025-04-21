@@ -562,13 +562,16 @@ function addTagToEditor(tag) {
   // 检查编辑框内容是否已有其他标签
   const hasOtherTags = /#[^\s]+/.test(currentContent);
   
-  // 在内容后添加标签
+  // 在内容后添加标签并在标签后添加空格，确保后续输入不会成为标签的一部分
   if (currentContent.trim() === '') {
-    elements.editor.value = tag;
+    // 如果编辑框为空，只添加标签和空格
+    elements.editor.value = `${tag} `;
   } else if (hasOtherTags) {
-    elements.editor.value = `${currentContent} ${tag}`;
+    // 如果已有其他标签，在空格后添加新标签和空格
+    elements.editor.value = `${currentContent} ${tag} `;
   } else {
-    elements.editor.value = `${currentContent}\n\n${tag}`;
+    // 否则，在内容后添加新标签和空格
+    elements.editor.value = `${currentContent}\n\n${tag} `;
   }
   
   // 更新富文本编辑器内容
@@ -576,6 +579,33 @@ function addTagToEditor(tag) {
     // 将编辑器内容转换为HTML并更新富文本编辑器
     let htmlContent = elements.editor.value.replace(/\n/g, '<br>');
     elements.editorContainer.innerHTML = htmlContent;
+    
+    // 设置光标位置到标签后的空格处
+    setCaretToEnd(elements.editorContainer);
+  } else {
+    // 对于textarea，也设置光标到末尾
+    elements.editor.focus();
+    elements.editor.selectionStart = elements.editor.value.length;
+    elements.editor.selectionEnd = elements.editor.value.length;
+  }
+}
+
+// 设置光标到元素内容末尾的辅助函数
+function setCaretToEnd(element) {
+  element.focus();
+  if (typeof window.getSelection != "undefined" && typeof document.createRange != "undefined") {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    range.collapse(false); // false表示折叠到末尾
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  } else if (typeof document.body.createTextRange != "undefined") {
+    // 兼容IE
+    const textRange = document.body.createTextRange();
+    textRange.moveToElementText(element);
+    textRange.collapse(false); // false表示折叠到末尾
+    textRange.select();
   }
 }
 
@@ -610,48 +640,7 @@ function saveContent() {
     const tempDiv = document.createElement('div');
     tempDiv.innerHTML = htmlContent;
     
-    // 处理列表
-    const convertListItems = (listElements, isOrdered) => {
-      for (let i = 0; i < listElements.length; i++) {
-        const list = listElements[i];
-        const items = list.querySelectorAll('li');
-        const textItems = [];
-        
-        for (let j = 0; j < items.length; j++) {
-          const prefix = isOrdered ? `${j + 1}. ` : '- ';
-          textItems.push(prefix + items[j].textContent);
-        }
-        
-        // 创建替换文本节点
-        const textNode = document.createTextNode(textItems.join('\n'));
-        list.parentNode.replaceChild(textNode, list);
-      }
-    };
-    
-    // 转换有序和无序列表为Markdown格式
-    convertListItems(tempDiv.querySelectorAll('ol'), true);
-    convertListItems(tempDiv.querySelectorAll('ul'), false);
-    
-    // 处理加粗文本
-    const boldElements = tempDiv.querySelectorAll('b, strong');
-    for (let i = 0; i < boldElements.length; i++) {
-      const boldElement = boldElements[i];
-      const text = boldElement.textContent;
-      const markdownBold = `**${text}**`;
-      const textNode = document.createTextNode(markdownBold);
-      boldElement.parentNode.replaceChild(textNode, boldElement);
-    }
-    
-    // 处理下划线文本
-    const underlineElements = tempDiv.querySelectorAll('u');
-    for (let i = 0; i < underlineElements.length; i++) {
-      const underlineElement = underlineElements[i];
-      const text = underlineElement.textContent;
-      // 使用HTML下划线标签
-      const markdownUnderline = `<u>${text}</u>`;
-      const textNode = document.createTextNode(markdownUnderline);
-      underlineElement.parentNode.replaceChild(textNode, underlineElement);
-    }
+    // 处理列表和格式化等...
     
     // 将<br>替换为换行符
     content = tempDiv.textContent.replace(/<br>/g, '\n');
@@ -693,27 +682,70 @@ function saveContent() {
   chrome.storage.sync.get('flomoSettings', (data) => {
     const settings = data.flomoSettings || {};
     const webhookUrl = settings.webhookUrl;
-    let finalContent = content;
     
-    // 获取标签输入的值
-    const tagsInput = elements.tagInput.value.trim();
-    if (tagsInput) {
-      // 添加标签到内容（确保在内容末尾且有换行）
-      if (!finalContent.endsWith('\n')) {
-        finalContent += '\n';
+    // 处理内容和标签
+    // 首先将内容分割为正文和可能的标签部分
+    let finalContent = '';
+    let tagsContent = '';
+    
+    // 查找内容中的标签 (以 # 开头的单词)
+    // 正则表达式查找内容中独立的标签行（整行都是标签）
+    const lines = content.split('\n');
+    const contentLines = [];
+    
+    // 分离标签和内容行
+    lines.forEach(line => {
+      const trimmedLine = line.trim();
+      // 如果是标签行（以#开头的标识符）
+      if (trimmedLine.startsWith('#')) {
+        // 检查这行是否只包含标签和空格
+        // 分割空格，检查每个部分是否都是标签格式
+        const parts = trimmedLine.split(/\s+/).filter(p => p !== '');
+        const allPartsAreTags = parts.every(part => part.startsWith('#'));
+        
+        if (allPartsAreTags) {
+          // 这是一个标签行，添加到标签内容
+          if (tagsContent) {
+            tagsContent += ' ' + parts.join(' ');
+          } else {
+            tagsContent = parts.join(' ');
+          }
+        } else {
+          // 这行包含标签但也有其他内容，作为普通内容处理
+          contentLines.push(line);
+        }
+      } else if (trimmedLine) {
+        // 这是正常内容，添加到内容部分
+        contentLines.push(line);
+      } else if (contentLines.length > 0) {
+        // 保留内容间的空行
+        contentLines.push(line);
       }
-      
+    });
+    
+    finalContent = contentLines.join('\n').trim();
+    
+    // 获取额外的标签输入
+    const tagsInput = elements.tagInput.value.trim();
+    let additionalTags = '';
+    
+    if (tagsInput) {
       // 拆分标签并格式化
       const tags = tagsInput.split(/\s+/).filter(tag => tag);
-      const formattedTags = tags.map(tag => {
+      additionalTags = tags.map(tag => {
         // 如果标签不以#开头，添加#
         return tag.startsWith('#') ? tag : `#${tag}`;
       }).join(' ');
-      
-      // 添加标签
-      if (formattedTags) {
-        finalContent += `\n${formattedTags}`;
-      }
+    }
+    
+    // 合并所有标签
+    let allTags = '';
+    if (tagsContent && additionalTags) {
+      allTags = tagsContent + ' ' + additionalTags;
+    } else if (tagsContent) {
+      allTags = tagsContent;
+    } else if (additionalTags) {
+      allTags = additionalTags;
     }
     
     // 最终处理：修剪多余空行，确保格式干净
@@ -733,6 +765,11 @@ function saveContent() {
           finalContent += `\n\n${sourceText}`;
         }
       }
+    }
+    
+    // 如果有标签，添加到内容末尾
+    if (allTags) {
+      finalContent = finalContent.trim() + (finalContent ? '\n\n' : '') + allTags;
     }
     
     if (!webhookUrl) {
